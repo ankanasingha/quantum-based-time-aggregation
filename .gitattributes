@@ -1,0 +1,2 @@
+*.csv filter=lfs diff=lfs merge=lfs -text
+data/opsd-time_series-2020-10-06/opsd-time_series-2020-10-06/time_series_60min_singleindex.csv filter=lfs diff=lfs merge=lfs -text

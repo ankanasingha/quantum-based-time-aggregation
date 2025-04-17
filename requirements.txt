@@ -1,0 +1,11 @@
+numpy==1.24.3
+pandas==1.5.3
+scipy==1.10.1
+pypsa==0.26.1
+seaborn==0.12.2
+matplotlib==3.7.1
+scikit-learn==1.2.2
+qiskit==0.45.1
+qiskit-optimization==0.5.3
+qiskit-algorithms==0.5.2
+plotly==5.15.0

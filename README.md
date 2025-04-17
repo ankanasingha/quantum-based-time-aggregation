@@ -46,4 +46,5 @@ The dataset we work with spans from December 2018 through November 2019, was div
 - Clone the repository
 - Create Virtual Environment (python -m venv venv)
 - Activate Virtual Environment (venv\Scripts\activate)
+- Install dependencies (`pip install -r requirements.txt`)
 - `python experiment_1.py`
