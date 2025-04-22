@@ -16,13 +16,13 @@ We evaluated the QUBO‑based temporal aggregation (via QAOA) across five scenar
 **Random generator placement**
 Runs for generators with random bus assignments, k = 3 and number of representative days per season is 18.
 - **Experiment 1 ([experiment_1.py](experiment_1.py)):**  Seeded with `np.random.seed(30)`
-- **Experiment 2 (experiment_2.py):**  seeded with `np.random.seed(42)`
+- **Experiment 2 ([experiment_2.py](experiment_2.py)):**  seeded with `np.random.seed(42)`
 
 **Deterministic generator placement**
 Generators assigned to even‑odd buses.
-- **Experiment 3 (experiment_3.py):** k = 2 and number of representative days per season is 12 
-- **Experiment 4 (experiment_4.py):** k = 3 and number of representative days per season is 18 
-- **Experiment 5 (experiment_5.py):** k = 4 and number of representative days per season is 24 
+- **Experiment 3 ([experiment_3.py](experiment_3.py)):** k = 2 and number of representative days per season is 12 
+- **Experiment 4 ([experiment_4.py](experiment_4.py)):** k = 3 and number of representative days per season is 18 
+- **Experiment 5 ([experiment_5.py](experiment_5.py)):** k = 4 and number of representative days per season is 24 
 
 All scenarios cover four seasons (Winter, Spring, Summer, Autumn) and three network topologies ([IEE9‑bus](https://github.com/MATPOWER/matpower/blob/master/data/case9.m), [IEEE30‑bus](https://github.com/MATPOWER/matpower/blob/master/data/case_ieee30.m), [IEEE118‑bus](https://github.com/MATPOWER/matpower/blob/master/data/case118.m)). We compare full‑resolution versus aggregated results for cost deviations (4–6% under deterministic placement) and dispatch accuracy, highlighting variability introduced by random placement
 
