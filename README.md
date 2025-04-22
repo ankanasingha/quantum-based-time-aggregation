@@ -15,7 +15,7 @@ We evaluated the QUBO‑based temporal aggregation (via QAOA) across five scenar
 
 **Random generator placement**
 Runs for generators with random bus assignments, k = 3 and number of representative days per season is 18.
-- **Experiment 1 (experiment_1.py):**  Seeded with `np.random.seed(30)`
+- **Experiment 1 ([experiment_1.py](experiment_1.py)):**  Seeded with `np.random.seed(30)`
 - **Experiment 2 (experiment_2.py):**  seeded with `np.random.seed(42)`
 
 **Deterministic generator placement**
