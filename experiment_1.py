@@ -16,6 +16,7 @@ from qiskit.primitives import Sampler
 from sklearn.metrics import mean_squared_error
 from IPython.display import display
 import plotly.express as px
+import zipfile
 import plotly.graph_objects as go
 import random
 from sklearn.metrics import pairwise_distances
@@ -37,7 +38,14 @@ def load_ieee_network(case_filename):
 
 
 def load_csv_data(csv_file_path):
-    df = pd.read_csv(csv_file_path, index_col=0, parse_dates=True)
+    with zipfile.ZipFile(csv_file_path, 'r') as z:
+        csv_filename = next(f for f in z.namelist() if f.endswith('.csv'))
+        with z.open(csv_filename) as f:
+            df = pd.read_csv(
+                f,
+                parse_dates=['utc_timestamp'],
+                index_col='utc_timestamp'
+            )
     return df
 
 
@@ -61,7 +69,7 @@ def simulate_hydro_profile(index, capacity=8000, base_cf=0.85, amp=0.15, offset=
 
 # Load load and wind profiles from OPSD CSV file, select columns of interest, clean, and rename columns. Remove the outliers from the load data keeping the outliers for wind data to capture extreme situations.
 def load_profiles():
-    load_csv = 'data/opsd-time_series-2020-10-06/opsd-time_series-2020-10-06/time_series_60min_singleindex.csv'
+    load_csv = 'data/opsd-time_series-2020-10-06/opsd-time_series-2020-10-06/time_series_60min_singleindex.zip'
     load_data = load_csv_data(load_csv)
 
     columns_of_interest = [
