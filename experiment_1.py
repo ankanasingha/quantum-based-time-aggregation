@@ -4,6 +4,7 @@ import pandas as pd
 import pypsa
 import scipy.io
 import seaborn as sns
+import zipfile
 import matplotlib.pyplot as plt
 from scipy.stats import zscore
 from scipy.io import loadmat
@@ -26,7 +27,7 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 
 os.environ['OMP_NUM_THREADS'] = '1'
-np.random.seed(42)
+
 
 def load_ieee_network(case_filename):
     data = scipy.io.loadmat(case_filename)
