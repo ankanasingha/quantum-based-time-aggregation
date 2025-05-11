@@ -154,7 +154,7 @@ def plot_yearly_profiles(load_profiles_df, wind_profiles_df):
 # # Clustering & QUBO Functions
 
 # Construct a QUBO for representative day selection.Solve the QUBO using QAOA via Qiskit.
-def get_rep_days_qubo(daily_features, k=2, penalty=1e4, reps=2):
+def get_rep_days_qubo(daily_features, k=4, penalty=1e4, reps=2):
     from sklearn.metrics import pairwise_distances
     dist_matrix = pairwise_distances(daily_features, metric='euclidean')
     qp = QuadraticProgram()
@@ -384,8 +384,8 @@ def main():
                         day_hydro = np.mean(hydro_month[d * 24:(d + 1) * 24])
                         daily_features.append([day_load, day_wind, day_hydro])
                     daily_features = np.array(daily_features)
-                    # Select 2 representative days per half-month via QUBO
-                    selected_days = get_rep_days_qubo(daily_features, k=2, penalty=1e4, reps=1)
+                    # Select 4 representative days per half-month via QUBO
+                    selected_days = get_rep_days_qubo(daily_features, k=4, penalty=1e4, reps=1)
                     month_offset = (load_season['Month'] < month).sum() // 24
                     rep_days_qubo.extend([month_offset + start + idx for idx in selected_days])
 

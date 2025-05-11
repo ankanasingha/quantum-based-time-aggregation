@@ -237,19 +237,17 @@ def build_pypsa_network(network_data, load_profiles, wind_profiles, rep_days, hy
         n.add("Load", f"Load_{bus_name}", bus=bus_name,
               p_set=load_profiles.iloc[:len(rep_snapshots), 0].values)
 
-    # Randomly assign generators to each bus
+    # Add generators
     for bus in buses:
         bus_name = f"Bus_{int(bus)}"
-        if random.random() < 0.5:
+        if int(bus) % 2 == 1:
             n.add("Generator", f"Hydro_{bus_name}", bus=bus_name,
-                  p_nom=8000,
-                  marginal_cost=10,
+                  p_nom=8000, marginal_cost=10,
                   p_max_pu=hydro_series.loc[rep_snapshots].values if hydro_series is not None else 1.0,
                   carrier="hydro")
         else:
             n.add("Generator", f"Wind_{bus_name}", bus=bus_name,
-                  p_nom_extendable=True,
-                  marginal_cost=7,
+                  p_nom_extendable=True, marginal_cost=7,
                   p_max_pu=wind_profiles.iloc[:len(rep_snapshots), 0].values,
                   carrier="wind")
 
