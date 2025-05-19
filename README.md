@@ -19,6 +19,8 @@ We evaluated the QUBO‑based temporal aggregation (via QAOA) across three scena
 All scenarios cover four seasons (Winter, Spring, Summer, Autumn) and three network topologies ([IEE9‑bus](https://github.com/MATPOWER/matpower/blob/master/data/case9.m), [IEEE30‑bus](https://github.com/MATPOWER/matpower/blob/master/data/case_ieee30.m), [IEEE118‑bus](https://github.com/MATPOWER/matpower/blob/master/data/case118.m)). We compare full‑resolution versus aggregated results for cost deviations (4–6% under deterministic placement) and dispatch accuracy, highlighting variability introduced by random placement
 
 
+## Flow Chart
+![alt text](docs/images/program_flow.png "Flow Chart")
 ## Reference Data
 
 **Load & Wind Profiles:** Sourced from the [Open Source Power Data platform](https://data.open-power-system-data.org/time_series).
