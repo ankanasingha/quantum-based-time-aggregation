@@ -1,41 +1,46 @@
 import os
-import numpy as np
-import pandas as pd
 import pypsa
 import scipy.io
 import seaborn as sns
-import zipfile
-import matplotlib.pyplot as plt
-from scipy.stats import zscore
 from scipy.io import loadmat
 from sklearn.metrics import pairwise_distances
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from qiskit_optimization import QuadraticProgram
+from sklearn.manifold import TSNE
+import itertools
+import time
+import json
+from collections import defaultdict
+from qiskit.primitives import Sampler
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+import scipy.io
+import pypsa
+from sklearn.metrics import pairwise_distances
+from sklearn.manifold import TSNE
 from qiskit_optimization import QuadraticProgram
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
 from qiskit_algorithms import QAOA
 from qiskit_algorithms.optimizers import COBYLA
-from qiskit.primitives import Sampler
-from sklearn.metrics import mean_squared_error
-from IPython.display import display
-import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from IPython.display import display
-import plotly.graph_objects as go
-from matplotlib.backends.backend_pdf import PdfPages
+from qiskit.algorithms.minimum_eigensolvers import QAOA, NumPyMinimumEigensolver
+from qiskit.algorithms.optimizers import COBYLA
+from qiskit_optimization.algorithms import MinimumEigenOptimizer
 from pandas.plotting import parallel_coordinates
-import seaborn as sns
-from sklearn.manifold import TSNE
 
 os.environ['OMP_NUM_THREADS'] = '1'
 
-
 def load_ieee_network(case_filename):
     data = scipy.io.loadmat(case_filename)
-    mpc = data.get('mpc')  # <== This returns a numpy structured array
+    mpc = data.get('mpc')
     if mpc is None:
         raise ValueError("File does not contain 'mpc' key")
 
-    mpc = mpc[0, 0]  # Extract the struct fields
+    mpc = mpc[0, 0]
     network_data = {
         'bus': mpc['bus'],
         'branch': mpc['branch'],
@@ -54,7 +59,6 @@ def load_csv_data(csv_file_path):
             )
     return df
 
-
 def remove_outliers_iqr(df, column, multiplier=1.27):
     Q1 = df[column].quantile(0.25)
     Q3 = df[column].quantile(0.75)
@@ -65,16 +69,12 @@ def remove_outliers_iqr(df, column, multiplier=1.27):
     return df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
 
 
-
 def simulate_hydro_profile(index, capacity=8000, base_cf=0.85, amp=0.15, offset=80):
     day_of_year = index.dayofyear
     hydro_cf = base_cf - amp * np.sin(2 * np.pi * (day_of_year - offset) / 365)
     return hydro_cf * capacity
 
-
 # Load load and wind profiles from OPSD CSV file, select columns of interest, clean, and rename columns. Remove the outliers from the load data keeping the outliers for wind data to capture extreme situations.
-
-
 
 def load_profiles():
     load_csv = 'data/opsd-time_series-2020-10-06/opsd-time_series-2020-10-06/time_series_60min_singleindex.zip'
@@ -127,46 +127,69 @@ def plot_yearly_profiles(load_profiles_df, wind_profiles_df):
     start_date = pd.to_datetime("2018-12-01")
     end_date   = pd.to_datetime("2019-11-30")
 
-    load_profiles_df = load_profiles_df.loc[start_date:end_date]
-    wind_profiles_df = wind_profiles_df.loc[start_date:end_date]
+    load_profiles_df = load_profiles_df[(load_profiles_df.index >= start_date) & (load_profiles_df.index <= end_date)]
+    wind_profiles_df = wind_profiles_df[(wind_profiles_df.index >= start_date) & (wind_profiles_df.index <= end_date)]
 
     hydro_series = simulate_hydro_profile(load_profiles_df.index)
 
     combined_df = pd.DataFrame({
-        'Load (MW)':  load_profiles_df['Load (MW)'].values,
-        'Wind (MW)':  wind_profiles_df['Wind (MW)'].values,
+        'Load (MW)': load_profiles_df['Load (MW)'].values,
+        'Wind (MW)': wind_profiles_df['Wind (MW)'].values,
         'Hydro (MW)': hydro_series
     }, index=load_profiles_df.index)
 
     daily_df = combined_df.resample('D').mean()
 
-    # --- here’s the only part that changes ---
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(daily_df.index, daily_df['Load (MW)']  / 1e3, label='Load (10³ MW)')
-    ax.plot(daily_df.index, daily_df['Wind (MW)']  / 1e3, label='Wind (10³ MW)')
-    ax.plot(daily_df.index, daily_df['Hydro (MW)'] / 1e3, label='Hydro (10³ MW)')
-
-    # force the axis to start/end exactly at your data
-    ax.set_xlim(daily_df.index.min(), daily_df.index.max())
-
-    # optional: nice month‐ticks on the 1st of each month
-    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=1))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Power (×10³ MW)")
-    ax.grid(True)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig("Yearly_Load_Wind_Hydro_Profiles_2019.pdf", format="pdf")
+    plt.figure(figsize=(10, 5))
+    plt.plot(daily_df.index, daily_df['Load (MW)'] / 1e3, label='Load (10³ MW)')
+    plt.plot(daily_df.index, daily_df['Wind (MW)'] / 1e3, label='Wind (10³ MW)')
+    plt.plot(daily_df.index, daily_df['Hydro (MW)'] / 1e3, label='Hydro (10³ MW)')
+    plt.xlabel("Date")
+    plt.ylabel("Power (×10³ MW)")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("Yearly_Load_Wind_Hydro_Profiles_2019.pdf", format="pdf")
     plt.show()
 
+def build_daily_72d_matrix(load_season, wind_season, hydro_series):
+    """Return (N_days, 72) array concatenating 24h load, 24h wind, 24h hydro per day."""
+    num_days = len(load_season) // 24
+    X = np.zeros((num_days, 72), dtype=float)
+    for d in range(num_days):
+        sl = slice(d * 24, (d + 1) * 24)
+        L = load_season.iloc[sl]['Load (MW)'].values.astype(float)
+        W = wind_season.iloc[sl]['Wind (MW)'].values.astype(float)
+        H = hydro_series.iloc[sl].values.astype(float)
+        X[d, :24] = L
+        X[d, 24:48] = W
+        X[d, 48:72] = H
+    return X
 
-# # Clustering & QUBO Functions
+def pca_reduce_to_3(X, scaler=None, pca=None):
+    """
+    Standardize then reduce 72D daily vectors to 3D via PCA.
+    Returns reduced features and fitted scaler/pca (if not provided).
+    """
+    own_scaler = False
+    own_pca = False
+    if scaler is None:
+        scaler = StandardScaler(with_mean=True, with_std=True)
+        own_scaler = True
+        Xs = scaler.fit_transform(X)
+    else:
+        Xs = scaler.transform(X)
 
-# Construct a QUBO for representative day selection.Solve the QUBO using QAOA via Qiskit.
-def get_rep_days_qubo(daily_features, k=2, penalty=1e4, reps=2):
-    from sklearn.metrics import pairwise_distances
+    if pca is None:
+        pca = PCA(n_components=3, random_state=42)
+        own_pca = True
+        Z = pca.fit_transform(Xs)
+    else:
+        Z = pca.transform(Xs)
+
+    return Z, (scaler if own_scaler else None), (pca if own_pca else None)
+
+def get_rep_days_qubo(daily_features, k, penalty=1e4, reps=1, maxiter=500):
     dist_matrix = pairwise_distances(daily_features, metric='euclidean')
     qp = QuadraticProgram()
     N = len(daily_features)
@@ -178,17 +201,14 @@ def get_rep_days_qubo(daily_features, k=2, penalty=1e4, reps=2):
         for j in range(i + 1, N):
             quadratic[(i, j)] = dist_matrix[i, j] + 2 * penalty
     qp.minimize(linear=linear, quadratic=quadratic)
-    optimizer = COBYLA(maxiter=1000)
+
+    optimizer = COBYLA(maxiter=maxiter)
     sampler = Sampler()
     qaoa = QAOA(optimizer=optimizer, reps=reps, sampler=sampler)
     meo = MinimumEigenOptimizer(qaoa)
     result = meo.solve(qp)
     rep_days = [i for i, bit in enumerate(result.x) if bit > 0.5]
     return rep_days
-
-
-# Compute non-uniform weights: count how many full days are assigned to each rep day.
-
 
 def compute_day_weights(full_features, rep_days):
     rep_day_weights = {r: 0 for r in rep_days}
@@ -198,16 +218,15 @@ def compute_day_weights(full_features, rep_days):
         rep_day_weights[closest_rep] += 1
     return rep_day_weights
 
-# Construct a PyPSA network from IEEE network data, load profiles, and wind profiles, hydro profile.
-#     'rep_days' is a list of representative day indices.
+from collections import defaultdict
+
 
 def build_pypsa_network(network_data, load_profiles, wind_profiles, rep_days, hydro_series, day_weights=None):
     n = pypsa.Network()
-    n.add("Carrier",
-          name=["AC", "wind", "hydro"],
-          co2_emissions=[0.0, 0.0, 0.0],
-          max_growth=[np.inf, np.inf, np.inf],
-          max_relative_growth=[np.inf, np.inf, np.inf])
+    for cname in ["AC", "wind", "hydro"]:
+        n.add("Carrier", name=cname)
+    if "co2_emissions" in n.carriers.columns:
+        n.carriers.loc[["AC", "wind", "hydro"], "co2_emissions"] = 0.0
 
     buses = network_data.get('bus')
     if buses is None:
@@ -221,15 +240,21 @@ def build_pypsa_network(network_data, load_profiles, wind_profiles, rep_days, hy
 
     lines = network_data.get('branch')
     if lines is not None:
-        for line in lines:
-            bus0 = f"Bus_{int(line[0])}"
-            bus1 = f"Bus_{int(line[1])}"
-            x = line[3] if len(line) > 3 and line[3] > 0 else 0.1
-            r = line[2] if len(line) > 2 and line[2] > 0 else 0.001  # Set minimal resistance
-            n.add("Line", f"Line_{int(line[0])}_{int(line[1])}",
-                  bus0=bus0, bus1=bus1, x=x, r=r, s_nom=500, carrier="AC")
+        pair_counts = defaultdict(int)  # counts per (i,j) (directional) pair
+        for idx, line in enumerate(lines, start=1):
+            i = int(line[0]);
+            j = int(line[1])
+            bus0 = f"Bus_{i}"
+            bus1 = f"Bus_{j}"
 
-    # Create snapshots and assign weights from day_weights
+            # MATPOWER columns: r=x[2], x=x[3]; fallbacks stay the same
+            x = line[3] if len(line) > 3 and line[3] > 0 else 0.1
+            r = line[2] if len(line) > 2 and line[2] > 0 else 0.001
+
+            pair_counts[(i, j)] += 1
+            name = f"Line_{i}_{j}_{pair_counts[(i, j)]}"  # ensure uniqueness
+
+            n.add("Line", name, bus0=bus0, bus1=bus1, x=x, r=r, s_nom=500, carrier="AC")
     rep_snapshots = []
     weights = {}
     if day_weights is None:
@@ -242,13 +267,11 @@ def build_pypsa_network(network_data, load_profiles, wind_profiles, rep_days, hy
     n.set_snapshots(rep_snapshots)
     n.snapshot_weightings = pd.Series(weights)
 
-    # Add loads
     for bus in buses:
         bus_name = f"Bus_{int(bus)}"
         n.add("Load", f"Load_{bus_name}", bus=bus_name,
               p_set=load_profiles.iloc[:len(rep_snapshots), 0].values)
 
-    # Add generators
     for bus in buses:
         bus_name = f"Bus_{int(bus)}"
         if int(bus) % 2 == 1:
@@ -261,97 +284,175 @@ def build_pypsa_network(network_data, load_profiles, wind_profiles, rep_days, hy
                   p_nom_extendable=True, marginal_cost=7,
                   p_max_pu=wind_profiles.iloc[:len(rep_snapshots), 0].values,
                   carrier="wind")
-
     return n
-
-
-# Solve the network's LOPF problem using the HiGHS solver.
-
 
 def run_lopf(network):
     network.optimize(solver_name='highs')
     return network
 
+def plot_pca_explained_variance(pca, season):
+    """Bar plot of variance explained by 3 PCA components."""
+    ev = pca.explained_variance_ratio_
+    plt.figure(figsize=(6, 4))
+    plt.bar([1, 2, 3], ev, tick_label=['PC1', 'PC2', 'PC3'])
+    plt.ylim(0, 1)
+    plt.ylabel("Explained variance ratio")
+    # plt.title(f"PCA explained variance — {season}")
+    for i, v in enumerate(ev, start=1):
+        plt.text(i, v + 0.02, f"{v * 100:.1f}%", ha='center')
+    plt.tight_layout()
+    plt.savefig(f"pca_explained_{season}.pdf", dpi=200)
+    plt.show()
 
+def plot_pca3_scatter(Z3, rep_days, case_name, season):
+    """3D scatter of PCA(3) with representative days highlighted."""
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    fig = plt.figure(figsize=(7, 6))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(Z3[:, 0], Z3[:, 1], Z3[:, 2], s=18, alpha=0.35, label='All days')
+    if len(rep_days):
+        ax.scatter(Z3[rep_days, 0], Z3[rep_days, 1], Z3[rep_days, 2],
+                   s=60, marker='o', label='Rep days')
+    ax.set_xlabel('PC1');
+    ax.set_ylabel('PC2');
+    ax.set_zlabel('PC3')
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(f"pca3_scatter_{case_name}_{season}.pdf", dpi=220)
+    plt.show()
 
-def plot_season_profiles(case_name, season, load_df, wind_df, hydro_series, rep_days, save_path=None):
+def plot_season_profiles_with_reps(load_season, wind_season, hydro_season, rep_days, case_name, season):
+    """Time series for the season with vertical lines at representative-day starts."""
     fig, ax = plt.subplots(figsize=(10, 5))
-    load_k  = load_df['Load (MW)']  / 1e3
-    wind_k  = wind_df['Wind (MW)']  / 1e3
-    hydro_k = hydro_series           / 1e3
+    # aggregate by hour to MW×1e3
+    ax.plot(load_season.index, load_season['Load (MW)'] / 1e3, label='Load (10³ MW)', linewidth=2)
+    ax.plot(wind_season.index, wind_season['Wind (MW)'] / 1e3, label='Wind (10³ MW)', linewidth=2)
+    ax.plot(hydro_season.index, hydro_season / 1e3, label='Hydro (10³ MW)', linewidth=2)
 
-    ax.plot(load_df.index,      load_k,  label='Load (10³ MW)',  linewidth=1.2)
-    ax.plot(wind_df.index,      wind_k,  label='Wind (10³ MW)',  linewidth=1.2)
-    ax.plot(hydro_series.index, hydro_k, label='Hydro (10³ MW)', linewidth=1.2)
+    for d in rep_days:
+        date = load_season.index[d * 24]
+        ax.axvline(date, color='red', linestyle='--', alpha=0.6)
 
-    rep_dates = [load_df.index[d * 24] for d in rep_days]
-    for date in rep_dates:
-        ax.axvline(date, color='red', linestyle='--', alpha=0.5)
     ax.set_xlabel("Date")
     ax.set_ylabel("Power (×10³ MW)")
-    ax.legend()
-    ax.grid(True)
+    ax.legend();
+    ax.grid(True);
     plt.tight_layout()
-    plt.savefig(f"qubo_allcases_{season}_k_2.pdf", format="pdf")
+    plt.savefig(f"season_profiles_with_reps_{case_name}_{season}.pdf", format="pdf")
     plt.show()
 
-
-
-def plot_tsne(case_name, season, full_daily_features, rep_days,
-              perplexity=30, learning_rate=200, init='pca', n_iter=1000,
-              random_state=42, save_path=None):
+# t-SNE plot (2D) highlighting representative days ===
+def plot_tsne_2d_from_pca3(Z3, rep_days, case_name, season, perplexity=15):
     """
-    Perform a 2D t-SNE embedding of daily features and plot.
-
-    Saves both PNG and PDF versions.
+    Project PCA(3) -> t-SNE(2) and highlight representative days.
+    Saves as '<Season>_tsne_k3.pdf' to match the attached figure set.
     """
-    tsne = TSNE(
-        n_components=2,
-        perplexity=perplexity,
-        learning_rate=learning_rate,
-        init=init,
-        n_iter=n_iter,
-        random_state=random_state
-    )
-    embeddings = tsne.fit_transform(full_daily_features)
+    tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42,
+                init='random', learning_rate='auto')
+    Y = tsne.fit_transform(Z3)
 
-    plt.figure(figsize=(8, 6))
-    plt.scatter(embeddings[:, 0], embeddings[:, 1],
-                c='lightgray', label='All days', s=20, alpha=0.6)
+    plt.figure(figsize=(7, 6))
+    plt.scatter(Y[:, 0], Y[:, 1], s=20, alpha=0.35, label='All days')
     if rep_days:
-        reps = np.array(rep_days)
-        plt.scatter(embeddings[reps, 0], embeddings[reps, 1],
-                    c='red', label='QUBO rep days', s=50)
-
-    plt.xlabel("t-SNE dim 1")
-    plt.ylabel("t-SNE dim 2")
-    plt.legend()
+        plt.scatter(Y[rep_days, 0], Y[rep_days, 1],
+                    s=60, marker='o', label='Rep days')
+    plt.xlabel('t-SNE 1');
+    plt.ylabel('t-SNE 2')
+    plt.legend();
     plt.tight_layout()
-    plt.savefig(f"{season}_tsne_k_2.pdf", format="pdf")
+    plt.savefig(f"{season}_tsne_k3.pdf", format="pdf")
     plt.show()
 
+
+# summary figure set (5 charts) created from results_df
+def plot_summary_figures(results_df):
+    """
+    Expects columns: Case, Season, Full Cost, PCA3-QUBO Cost, Deviation (%), Rep days
+    Produces the five summary charts to match the attached PDF.
+    """
+
+    # Ensure nice ordering of seasons on plots
+    season_order = ['Winter', 'Spring', 'Summer', 'Autumn']
+    results_df = results_df.copy()
+    results_df['Season'] = pd.Categorical(results_df['Season'], categories=season_order, ordered=True)
+
+    # 1) Deviation bar chart by Case × Season
+    plt.figure(figsize=(9, 5))
+    for i, (case, sub) in enumerate(results_df.groupby('Case'), start=1):
+        plt.bar([f"{case}\n{s}" for s in sub.sort_values('Season')['Season']],
+                sub.sort_values('Season')['Deviation (%)'], label=case)
+    plt.ylabel("Deviation (%)")
+    plt.xticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig("qubo_deviation_by_case_season_k_3_even_odd.pdf", format="pdf")
+    plt.show()
+
+    # 2) Full vs QUBO cost (grouped bars) per Case (aggregated over seasons)
+    agg = results_df.groupby('Case', as_index=False).agg({
+        'Full Cost': 'mean',
+        'PCA3-QUBO Cost': 'mean'
+    })
+    x = np.arange(len(agg))
+    w = 0.35
+    plt.figure(figsize=(8, 5))
+    plt.bar(x - w / 2, agg['Full Cost'], width=w, label='Full')
+    plt.bar(x + w / 2, agg['PCA3-QUBO Cost'], width=w, label='PCA3-QUBO')
+    plt.xticks(x, agg['Case'])
+    plt.ylabel("Objective (mean over seasons)")
+    plt.legend();
+    plt.tight_layout()
+    plt.savefig("full_vs_qubo_cost_by_case_k_3_even_odd.pdf", format="pdf")
+    plt.show()
+
+    # 3) Deviation line plot across seasons per Case
+    plt.figure(figsize=(8, 5))
+    for case, sub in results_df.groupby('Case'):
+        sub = sub.sort_values('Season')
+        plt.plot(sub['Season'], sub['Deviation (%)'], marker='o', label=case)
+    plt.ylabel("Deviation (%)")
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig("qubo_deviation_lineplot_k_3_even_odd.pdf", format="pdf")
+    plt.show()
+
+    # 4) Average annual deviation by Case
+    mean_dev = results_df.groupby('Case', as_index=False)['Deviation (%)'].mean()
+    plt.figure(figsize=(7, 5))
+    plt.bar(mean_dev['Case'], mean_dev['Deviation (%)'])
+    plt.ylabel("Avg Deviation (%)")
+    plt.tight_layout()
+    plt.savefig("average_annual_deviation_by_case_k_3_even_odd.pdf", format="pdf")
+    plt.show()
+
+    # 5) Deviation heatmap (Case × Season)
+    # pivot to (Case × Season) matrix
+    pivot = results_df.pivot(index='Case', columns='Season', values='Deviation (%)').reindex(columns=season_order)
+    plt.figure(figsize=(7, 4.5))
+    im = plt.imshow(pivot.values, aspect='auto')
+    plt.colorbar(im, fraction=0.046, pad=0.04, label="Deviation (%)")
+    plt.yticks(range(len(pivot.index)), pivot.index)
+    plt.xticks(range(len(pivot.columns)), pivot.columns)
+    plt.tight_layout()
+    plt.savefig("deviation_heatmap_k_3_even_odd.pdf", format="pdf")
+    plt.show()
 
 def main():
     plt.rcParams.update({
-        'lines.linewidth': 2.5,
-        'lines.markersize': 8,
-        'lines.markeredgewidth': 1.5,
-        'patch.linewidth': 1.5,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'font.size': 16,
         'font.weight': 'bold',
         'axes.labelweight': 'bold',
-        'axes.titlesize': 0,
-        'xtick.labelsize': 10,
-        'ytick.labelsize': 14,
-        'xtick.major.width': 1.5,
-        'ytick.major.width': 1.5,
-        'xtick.major.size': 6,
-        'ytick.major.size': 6,
-        'axes.labelsize': 20,
-        'axes.labelweight': 'bold',
-        'legend.fontsize': 16,
-        'legend.title_fontsize': 18,
+        'axes.titlesize': 18,
+        'axes.titleweight': 'bold',
+        'axes.linewidth': 2,
+        'grid.linewidth': 1.5,
+        'lines.linewidth': 3,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14
     })
-    # 1. Load and preprocess profiles
+
+    # 1) Load and trim data
     load_profiles_df, wind_profiles_df = load_profiles()
     load_profiles_df.index = pd.to_datetime(load_profiles_df.index).tz_localize(None)
     wind_profiles_df.index = pd.to_datetime(wind_profiles_df.index).tz_localize(None)
@@ -361,9 +462,10 @@ def main():
     load_profiles_df = load_profiles_df.loc[start_date:end_date]
     wind_profiles_df = wind_profiles_df.loc[start_date:end_date]
 
+    # Yearly profiles
     plot_yearly_profiles(load_profiles_df, wind_profiles_df)
 
-    # Season assignment
+    # 2) Season tags
     def assign_season(month):
         if month in [12, 1, 2]:   return 'Winter'
         if month in [3, 4, 5]:    return 'Spring'
@@ -381,82 +483,107 @@ def main():
     for s in seasons:
         dates = seasonal_loads[s].index
         seasonal_hydro[s] = pd.Series(simulate_hydro_profile(dates), index=dates)
-    rep_days_by_season = {season: [] for season in seasons}
-    features_by_season = {season: None for season in seasons}
+
+    # 3) IEEE cases (enable/extend as needed)
     ieee_cases = {
-        'ieee9bus': 'data/case9.mat',
-        'ieee30bus': 'data/case30.mat',
-        'ieee118bus': 'data/case118.mat'
+        'ieee9bus': 'C:/Users/Lenovo/Documents/case9.mat',
+        'ieee30bus': 'C:/Users/Lenovo/Documents/case30.mat',
+        'ieee118bus': 'C:/Users/Lenovo/Documents/case118.mat'
     }
 
     summary_data = []
 
-    # Main simulation loop
+    # 4) Outer loop: cases → seasons
     for case_name, case_filename in ieee_cases.items():
-        print(f"\nStarting {case_name} simulations...")
+        print(f"\n=== {case_name} ===")
         network_data = load_ieee_network(case_filename)
 
         for season in seasons:
-            print(f"\nSimulating {season}...")
-            load_season = seasonal_loads[season]
-            wind_season = seasonal_wind[season]
-            hydro_season = seasonal_hydro[season]
-            num_days = len(load_season) // 24
-            if num_days < 1:
-                print(f"Not enough data for {season} in {case_name}. Skipping...")
+            print(f"\n-- Season: {season} --")
+            if seasonal_loads[season].empty:
+                print("No data for this season; skipping.")
                 continue
 
-            # Full simulation
-            rep_days_full = list(range(num_days))
+            load_season = seasonal_loads[season].drop(columns=['Month', 'Season'])
+            wind_season = seasonal_wind[season].drop(columns=['Month', 'Season'])
+            hydro_season = seasonal_hydro[season]
+
+            num_days = len(load_season) // 24
+            if num_days < 1:
+                print("Not enough data; skipping.")
+                continue
+
+            # 4a) Baseline full model
             hydro_series_full = pd.Series(hydro_season.values, index=load_season.index).astype(float)
+            rep_days_full = list(range(num_days))
             net_full = build_pypsa_network(
-                network_data, load_season, wind_season, rep_days_full,
+                network_data,
+                load_season,
+                wind_season,
+                rep_days_full,
                 hydro_series=hydro_series_full
             )
             net_full = run_lopf(net_full)
             cost_full = net_full.objective
 
-            # Prepare features for QUBO
-            full_daily_features = []
-            for d in range(num_days):
-                day_load = load_season.iloc[d * 24:(d + 1) * 24]['Load (MW)'].mean()
-                day_wind = wind_season.iloc[d * 24:(d + 1) * 24]['Wind (MW)'].mean()
-                day_hydro = np.mean(hydro_season.iloc[d * 24:(d + 1) * 24])
-                full_daily_features.append([day_load, day_wind, day_hydro])
-            full_daily_features = np.array(full_daily_features)
+            # 4b) PCA(3) features from 72D daily vectors
+            X72 = build_daily_72d_matrix(load_season, wind_season, hydro_season)
+            Z3, scaler, pca = pca_reduce_to_3(X72)
 
-            # QUBO-based representative day selection
+            # Explained variance (saved per case×season by helper)
+            plot_pca_explained_variance(pca, f"{case_name}_{season}")
+
+            # 4c) QUBO-based representative-day selection (split by half-month windows)
             rep_days_qubo = []
-            for month in sorted(load_season['Month'].unique()):
-                load_month = load_season[load_season['Month'] == month]
-                wind_month = wind_season[wind_season['Month'] == month]
-                hydro_month = hydro_series_full[load_season['Month'] == month]
-                num_days_month = len(load_month) // 24
-                split_points = [0, num_days_month // 2, num_days_month]
 
-                for i in range(2):
-                    start, end = split_points[i], split_points[i + 1]
-                    if end - start < 1:
+            def month_day_indices(m):
+                idx = pd.Index(load_season.index)
+                mask = (idx.month == m) & (idx.hour == 0)
+                day_idx = np.unique(np.where(mask)[0] // 24)
+                num_days = len(load_season) // 24
+                return day_idx[day_idx < num_days]
+
+            unique_months = sorted(pd.unique(pd.Index(load_season.index).month))
+            for m in unique_months:
+                idx_days = month_day_indices(m)
+                if len(idx_days) < 1:
+                    continue
+                split = len(idx_days) // 2
+                halves = [idx_days[:split], idx_days[split:]]
+                for half in halves:
+                    if len(half) < 1:
                         continue
-                    daily_features = []
-                    for d in range(start, end):
-                        day_load = load_month.iloc[d * 24:(d + 1) * 24]['Load (MW)'].mean()
-                        day_wind = wind_month.iloc[d * 24:(d + 1) * 24]['Wind (MW)'].mean()
-                        day_hydro = np.mean(hydro_month[d * 24:(d + 1) * 24])
-                        daily_features.append([day_load, day_wind, day_hydro])
-                    daily_features = np.array(daily_features)
-                    selected = get_rep_days_qubo(daily_features, k=2, penalty=1e4, reps=1)
-                    offset = (load_season['Month'] < month).sum() // 24
-                    rep_days_qubo.extend([offset + start + idx for idx in selected])
+                    feats_half = Z3[half, :]
+                    selected_local = get_rep_days_qubo(
+                        feats_half, k=2, penalty=1e4, reps=1, maxiter=500
+                    )
+                    rep_days_qubo.extend([half[i] for i in selected_local])
 
-            weights_qubo = compute_day_weights(full_daily_features, rep_days_qubo)
-            print("Representative Day Weights:")
+            rep_days_qubo = sorted(set(rep_days_qubo))
+            if len(rep_days_qubo) == 0:
+                rep_days_qubo = list(np.linspace(0, num_days - 1, 3, dtype=int))
+
+            # 4d) Weights in PCA space for aggregated run
+            weights_qubo = compute_day_weights(Z3, rep_days_qubo)
+            print("Representative Day Weights (date: weight):")
             for idx, w in weights_qubo.items():
                 date = load_season.index[idx * 24].strftime('%Y-%m-%d')
-                print(f"  {date}: {w:.4f}")
+                print(f"  {date}: {w}")
 
+            # 4e) Plots using selected reps
+            # PCA(3) scatter with reps (existing helper)
+            plot_pca3_scatter(Z3, rep_days_qubo, case_name, season)
+            # Seasonal time-series with rep-day markers (existing helper)
+            plot_season_profiles_with_reps(load_season, wind_season, hydro_season, rep_days_qubo, case_name, season)
+            # t-SNE with case name in the filename/title
+            plot_tsne_2d_from_pca3(Z3, rep_days_qubo, case_name, season, perplexity=15)
+
+            # 4f) Aggregated model using representative days + weights
             net_qubo = build_pypsa_network(
-                network_data, load_season, wind_season, rep_days_qubo,
+                network_data,
+                load_season,
+                wind_season,
+                rep_days_qubo,
                 hydro_series=hydro_series_full,
                 day_weights=weights_qubo
             )
@@ -464,106 +591,31 @@ def main():
             cost_qubo = net_qubo.objective
             deviation = abs(cost_qubo - cost_full) / cost_full * 100 if cost_full else np.nan
 
-            features_by_season[season] = full_daily_features
-
-            rep_days_by_season[season] = rep_days_qubo
+            print(f"[{case_name} - {season}] Full: {cost_full:.2f}, PCA3-QUBO: {cost_qubo:.2f}, Dev: {deviation:.2f}%")
             summary_data.append({
                 "Case": case_name,
                 "Season": season,
                 "Full Cost": cost_full,
-                "QUBO Cost": cost_qubo,
-                "QUBO Deviation (%)": deviation
+                "PCA3-QUBO Cost": cost_qubo,
+                "Deviation (%)": deviation,
+                "Rep days": len(rep_days_qubo)
             })
 
-            print(f"[{case_name} - {season}] Full: {cost_full:.2f}, QUBO: {cost_qubo:.2f}, Dev: {deviation:.2f}%")
-
-    # Compile and save summary
+    # 5) Summaries and the 5 missing summary charts
     results_df = pd.DataFrame(summary_data)
-    results_df.to_excel("annual_cost_deviation_summary_k_2.xlsx", index=False)
-    print(results_df.to_markdown(index=False))
+    results_df.to_excel("pca3_qubo_summary.xlsx", index=False)
 
-    for season in seasons:
-        plot_season_profiles('all_cases', season,
-                             seasonal_loads[season], seasonal_wind[season], seasonal_hydro[season],
-                             rep_days_by_season[season])
-        plot_tsne('all_cases', season,
-                  features_by_season[season], rep_days_by_season[season])
+    # Generate the five summary figures (bar/line/heatmap set)
+    if not results_df.empty:
+        plot_summary_figures(results_df)
 
-    # 8. Static summary plots
-    sns.set(style="whitegrid")
-    # Bar: deviation by case & season
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=results_df, x='Case', y='QUBO Deviation (%)', hue='Season')
-    plt.tight_layout()
-    plt.savefig("qubo_deviation_by_case_season_k_2_even_odd.pdf")
-    plt.show()
-    # Grouped bar
-    plt.figure(figsize=(12, 6))
-    melt = results_df.melt(['Case', 'Season'], ['Full Cost', 'QUBO Cost'],
-                           var_name='Cost Type', value_name='Cost')
-    sns.barplot(data=melt, x='Case', y='Cost', hue='Cost Type', ci=None)
-    plt.tight_layout()
-    plt.savefig("full_vs_qubo_cost_by_case_k_2_even_odd.pdf")
-    plt.show()
-
-    plt.figure(figsize=(10, 6))
-
-    for c in results_df['Case'].unique():
-        sub = results_df[results_df['Case'] == c]
-        plt.plot(
-            sub['Season'],
-            sub['QUBO Deviation (%)'],
-            marker='o',
-            lw=3,  # thicker line
-            markersize=10,  # bigger markers
-            label=c
-        )
-
-    plt.xlabel('Season', fontsize=22, fontweight='bold')
-    plt.ylabel('QUBO Deviation (%)', fontsize=22, fontweight='bold')
-
-    plt.xticks(fontsize=16, fontweight='bold')
-    plt.yticks(fontsize=16, fontweight='bold')
-
-    leg = plt.legend(
-        title='System Case',
-        fontsize=18,
-        title_fontsize=20,
-        frameon=True
-    )
-
-    for legline in leg.get_lines():
-        legline.set_linewidth(3.0)
-
-    plt.tight_layout()
-    plt.savefig("qubo_deviation_lineplot_k_2_even_odd.pdf", format='pdf', bbox_inches='tight')
-    plt.show()
-
-    # Avg deviation
-    plt.figure(figsize=(8, 5))
-    avg = results_df.groupby('Case')['QUBO Deviation (%)'].mean().reset_index()
-    sns.barplot(data=avg, x='Case', y='QUBO Deviation (%)')
-    plt.tight_layout()
-    plt.savefig("average_annual_deviation_by_case_k_2_even_odd.pdf")
-    plt.show()
-
-    dev_mat = results_df.pivot(index='Case', columns='Season', values='QUBO Deviation (%)')
-    dev_mat = dev_mat[seasons]
-
-    plt.figure(figsize=(6, 4))
-    sns.heatmap(dev_mat, annot=True, fmt=".2f", cmap="coolwarm", cbar_kws={'label': 'Deviation (%)'})
-    plt.ylabel("Case")
-    plt.xlabel("Season")
-    plt.tight_layout()
-    plt.savefig("deviation_heatmap_k_2_even_odd.pdf", format="pdf")
-    plt.show()
-
-    print("\nSimulation and analysis completed successfully.")
+    print("\n=== Summary ===")
+    try:
+        print(results_df.to_markdown(index=False))
+    except Exception:
+        print(results_df)
+    print("Process completed successfully!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-
-
-
-
