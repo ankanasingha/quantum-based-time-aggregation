@@ -26,6 +26,7 @@ Three presets are provided (per season):
 ## Sensitivity Analysis
 
 The paper performs a dedicated sensitivity study to test robustness of the QAOA-based selection and the accuracy–compression tradeoff:
+**Sensitivity Analysis** — `k = 3`, [`sensitivity_analysis.py`](sensitivity_analysis.py)  
 
 ### A. QAOA Settings (fixed `k = 3`)
 - **Circuit depth (`p`)**: {1, 2, 3}  
