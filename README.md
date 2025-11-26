@@ -1,7 +1,31 @@
 # Quantum-Inspired Temporal Aggregation for Power System Capacity Expansion
 
 > A quantum-compatible workflow that selects non-uniformly weighted representative days via QUBO→QAOA and plugs them into a PyPSA-based capacity expansion model.
+## Citation
 
+If you use this repository in academic or industrial research, please cite:
+
+**A. Singha, S. Mishra, M. Shafie-khah,  
+_Application of quantum computing to temporal aggregation for efficient capacity expansion in power systems_,  
+International Journal of Electrical Power & Energy Systems, vol. 173, 2025.**  
+https://doi.org/10.1016/j.ijepes.2025.111355
+
+
+```bibtex
+@article{Singha2025_QuantumAggregation,
+  title   = {Application of quantum computing to temporal aggregation for efficient capacity expansion in power systems},
+  author  = {Singha, Ankana and Mishra, Sambeet and Shafie-khah, Miadreza},
+  journal = {International Journal of Electrical Power & Energy Systems},
+  year    = {2025},
+  volume  = {173},
+  pages   = {111355},
+  issn    = {0142-0615},
+  doi     = {10.1016/j.ijepes.2025.111355},
+  url     = {https://www.sciencedirect.com/science/article/pii/S0142061525009032},
+  keywords = {Quantum computing, Representative days, Capacity expansion planning, Time aggregation, Renewable energy, Optimization}
+}
+
+```
 ## Context
 
 Modern power system planning requires high-resolution temporal data to capture variability in load and renewable resources, but full-year hourly simulations are expensive. This repository integrates **QUBO-formulated** representative-day selection solved by **QAOA**, then evaluates investment and operations using **PyPSA (LOPF)**. Across IEEE test systems and seasonal demand types, the approach preserves planning-cost fidelity while drastically shrinking the temporal dimension.
